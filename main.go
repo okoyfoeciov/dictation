@@ -243,6 +243,10 @@ func typeText(text string) error {
 	if os.Getenv("WAYLAND_DISPLAY") != "" {
 		// Prefer typing directly with xdotool when available.
 		if pathExists("xdotool") {
+			restore, err := setEnglishInput()
+			if err == nil && restore != nil {
+				defer restore()
+			}
 			cmd := exec.Command("xdotool", "type", "--clearmodifiers", text)
 			cmd.Stderr = os.Stderr
 			if err := cmd.Run(); err == nil {
@@ -272,6 +276,10 @@ func typeText(text string) error {
 
 	// 1) Try direct typing with xdotool
 	if pathExists("xdotool") {
+		restore, err := setEnglishInput()
+		if err == nil && restore != nil {
+			defer restore()
+		}
 		cmd := exec.Command("xdotool", "type", "--clearmodifiers", text)
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err == nil {
@@ -374,4 +382,70 @@ func stopRecording(pidFile string) error {
 func pathExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+// setEnglishInput attempts to temporarily switch the input method/layout to
+// an English layout so tools like xdotool will type in ASCII/English. It
+// returns a restore function (or nil) and an error. The restore function
+// should be called to restore the previous input state.
+func setEnglishInput() (func(), error) {
+	// Try setxkbmap first: record current layout with setxkbmap -query
+	// and then set to 'us'. Restoration will run the original "setxkbmap"
+	// command if we were able to capture it.
+	var restoreCmd []string
+	if pathExists("setxkbmap") {
+		// Attempt to read current layout(s)
+		out, err := exec.Command("setxkbmap", "-query").Output()
+		if err == nil {
+			// parse the layout line if present
+			lines := strings.Split(string(out), "\n")
+			for _, l := range lines {
+				l = strings.TrimSpace(l)
+				if strings.HasPrefix(l, "layout:") {
+					// capture the value after ':'
+					val := strings.TrimSpace(strings.TrimPrefix(l, "layout:"))
+					if val != "us" {
+						restoreCmd = []string{"setxkbmap", val}
+					}
+					break
+				}
+			}
+		}
+		// set to US layout (best-effort)
+		_ = exec.Command("setxkbmap", "us").Run()
+	}
+
+	// If ibus is present, try switching engine to 'xkb:us::eng' or a variant
+	// Capture current engine so we can restore it.
+	var restoreIBus string
+	if pathExists("ibus") {
+		cur, err := exec.Command("ibus", "engine").Output()
+		if err == nil {
+			restoreIBus = strings.TrimSpace(string(cur))
+		}
+		// Try common English engine names
+		// Note: this is best-effort; not all systems will have these engines.
+		engines := []string{"xkb:us::eng", "m17n:en:us", "xkb:us:eng"}
+		for _, e := range engines {
+			if exec.Command("ibus", "engine", e).Run() == nil {
+				// success
+				break
+			}
+		}
+	}
+
+	// If we didn't change anything, return nil restore
+	if restoreCmd == nil && restoreIBus == "" {
+		return nil, nil
+	}
+
+	// build restore function
+	return func() {
+		if len(restoreCmd) > 0 {
+			_ = exec.Command(restoreCmd[0], restoreCmd[1:]...).Run()
+		}
+		if restoreIBus != "" {
+			_ = exec.Command("ibus", "engine", restoreIBus).Run()
+		}
+	}, nil
 }
