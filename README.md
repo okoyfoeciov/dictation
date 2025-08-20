@@ -10,7 +10,7 @@ Customizable parts:
 - Activation and stop sound.
 - Output directory for temporary `.wav` file. 
 - Logic for knowing is there a recording going on.
-
+- Mechanism to type text to where the cursor in is. System-specific. 
 
 # Dictation CLI
 
